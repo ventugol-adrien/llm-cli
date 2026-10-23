@@ -1,5 +1,6 @@
 MODEL="${MODEL:-gemma4-31bunc}"
 LOCATION="${LOCATION:-desktop}"
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../llama_urls.sh"
 
 add_image() {
 	REQUEST_JSON=$(jq -c \
@@ -8,21 +9,9 @@ add_image() {
 }
 
 build_request() {
-	URL="https://desktop.adriens-apis.io/llm/stream-multiplex/"
-	case "$LOCATION" in
-	local)
-		URL="http://localhost:8000/llm/stream-multiplex/"
-		;;
-	desktop)
-		;;
-	remote)
-		URL="https://gpu.adriens-apis.io/llm/stream-multiplex/"
-		;;
-	*)
-		echo "Unknown location: $LOCATION" >&2
-		return 1
-		;;
-	esac
+	local base_url
+	base_url=$(llama:base_url "$LOCATION") || return 1
+	URL="$base_url/stream-multiplex/"
 
 	REQ=$(jq -cn \
 		--arg model "$MODEL" \

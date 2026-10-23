@@ -128,6 +128,30 @@ Schemas must be YAML objects. The default schema directory is
 Override a model with `--model`. Gemini and Grok keys are retrieved with
 `secret-tool lookup service <provider> key api_key`.
 
+### Llama endpoint configuration
+
+Set the API base URL for each llama location you use. These environment
+variables are required for the selected location; there are no fallback URLs:
+
+| Location | Environment variable |
+| --- | --- |
+| `local` | `LLM_CLI_LLAMA_LOCAL_URL` |
+| `desktop` (default) | `LLM_CLI_LLAMA_DESKTOP_URL` |
+| `remote` | `LLM_CLI_LLAMA_REMOTE_URL` |
+
+For example, export your actual service addresses in your shell configuration:
+
+```bash
+export LLM_CLI_LLAMA_LOCAL_URL='http://localhost:8000/llm'
+export LLM_CLI_LLAMA_DESKTOP_URL='https://desktop.example.com/llm'
+export LLM_CLI_LLAMA_REMOTE_URL='https://gpu.example.com/llm'
+```
+
+Values include the API base path (such as `/llm`), not `/stream-multiplex/`.
+A trailing slash is optional. Both llama prompts and `llm manage` use these
+variables; Gemini and Grok do not require them. Missing or empty values fail
+with an error naming the required variable.
+
 ## Session history
 
 When `AGENT_SESSION_ID` is set, prompts and responses are stored in

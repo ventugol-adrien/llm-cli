@@ -113,21 +113,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-case "$LOCATION" in
-    local)
-        API_URL="http://localhost:8000/llm"
-        ;;
-    desktop)
-        API_URL="https://desktop.adriens-apis.io/llm"
-        ;;
-    remote)
-        API_URL="https://gpu.adriens-apis.io/llm"
-        ;;
-    *)
-        echo "Unknown location: $LOCATION" >&2
-        exit 1
-        ;;
-esac
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/llama_urls.sh"
+API_URL=$(llama:base_url "$LOCATION") || exit 1
 
 case "$COMMAND" in
     status)

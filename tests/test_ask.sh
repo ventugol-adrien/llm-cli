@@ -7,6 +7,9 @@ trap 'rm -rf "$TEST_DIRECTORY"' EXIT
 export TEST_DIRECTORY
 export HOME="$TEST_DIRECTORY/home"
 unset AGENT_SESSION_ID
+export LLM_CLI_LLAMA_LOCAL_URL='http://local.example.test:8000/custom-api'
+export LLM_CLI_LLAMA_DESKTOP_URL='https://desktop.example.test/custom-api/'
+export LLM_CLI_LLAMA_REMOTE_URL='https://remote.example.test/custom-api'
 mkdir -p "$TEST_DIRECTORY/schemas"
 printf '%s\n' \
 	'type: object' \
@@ -290,12 +293,49 @@ for location in desktop local remote; do
 	assert_request '.requests[0].messages[0].content | (contains("Prefer Bash") or contains("suggest Python") or contains("$(secret-tool lookup service gemini key api_key)")) | not'
 	assert_request '.model == "gemma4-31bunc" and .requests[0].temperature == 0.9 and .requests[0].min_p == 0.8 and .requests[0].max_tokens == 4096 and .requests[0].thinking_budget_tokens == 2048 and .requests[0].chat_template_kwargs.enable_thinking == true'
 	case "$location" in
-	desktop) expected_url='https://desktop.adriens-apis.io/llm/stream-multiplex/' ;;
-	local) expected_url='http://localhost:8000/llm/stream-multiplex/' ;;
-	remote) expected_url='https://gpu.adriens-apis.io/llm/stream-multiplex/' ;;
+	desktop) expected_url='https://desktop.example.test/custom-api/stream-multiplex/' ;;
+	local) expected_url='http://local.example.test:8000/custom-api/stream-multiplex/' ;;
+	remote) expected_url='https://remote.example.test/custom-api/stream-multiplex/' ;;
 	esac
 	[[ "$(<"$TEST_DIRECTORY/url")" == "$expected_url" ]]
 done
+(
+	unset LLM_CLI_LLAMA_LOCAL_URL LLM_CLI_LLAMA_DESKTOP_URL LLM_CLI_LLAMA_REMOTE_URL
+	for location in local desktop remote; do
+		expect_failure llama 'Missing endpoint' --location "$location"
+		rg -q "Set LLM_CLI_LLAMA_${location^^}_URL" "$TEST_DIRECTORY/error"
+	done
+	export LLM_CLI_LLAMA_DESKTOP_URL=''
+	expect_failure llama 'Empty endpoint'
+	rg -q 'Set LLM_CLI_LLAMA_DESKTOP_URL' "$TEST_DIRECTORY/error"
+	ask gemini 'No llama configuration needed' </dev/null >"$TEST_DIRECTORY/output"
+	ask grok 'No llama configuration needed' </dev/null >"$TEST_DIRECTORY/output"
+	export LLM_CLI_LLAMA_LOCAL_URL='http://only-local.example.test/api/'
+	ask llama 'Only selected location needs configuration' --location local </dev/null >"$TEST_DIRECTORY/output"
+	[[ "$(<"$TEST_DIRECTORY/url")" == 'http://only-local.example.test/api/stream-multiplex/' ]]
+)
+(
+	curl() {
+		printf '%s\n' "$@" >"$TEST_DIRECTORY/manage-request"
+		printf '{}'
+	}
+	export -f curl
+	for location in local desktop remote; do
+		bash "$ROOT/libexec/manage.sh" status --location "$location" >"$TEST_DIRECTORY/output"
+		case "$location" in
+		local) expected_base="${LLM_CLI_LLAMA_LOCAL_URL%/}" ;;
+		desktop) expected_base="${LLM_CLI_LLAMA_DESKTOP_URL%/}" ;;
+		remote) expected_base="${LLM_CLI_LLAMA_REMOTE_URL%/}" ;;
+		esac
+		grep -Fxq "$expected_base/status" "$TEST_DIRECTORY/manage-request"
+	done
+	unset LLM_CLI_LLAMA_DESKTOP_URL
+	if bash "$ROOT/libexec/manage.sh" status >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
+		echo 'Expected manage to reject a missing endpoint' >&2
+		exit 1
+	fi
+	rg -q 'Set LLM_CLI_LLAMA_DESKTOP_URL' "$TEST_DIRECTORY/error"
+)
 ask llama --buff 'Buffered llama response' </dev/null >"$TEST_DIRECTORY/output"
 [[ "$(<"$TEST_DIRECTORY/output")" == '**Hello** world' ]]
 if rg -q 'Thinking|TTFT:' "$TEST_DIRECTORY/output"; then
