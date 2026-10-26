@@ -416,6 +416,7 @@ if [[ ${#FILES[@]} -gt 0 ]]; then
 fi
 
 REQUEST_FILE="$ASSET_TEMP_DIR/request.json"
+TOOL_HISTORY_FILE="$ASSET_TEMP_DIR/tool-history.json"
 HAS_TOOL_HISTORY=false
 if [[ ${#TOOL_NAMES[@]} -gt 0 ]] ||
 	jq -e 'any(.session_events[]?; .role == "assistant_step" or .role == "tool_result")' \
@@ -455,7 +456,8 @@ if [[ "$HAS_TOOL_HISTORY" == true ]]; then
 				text: ("File: " + .path + "\n\n" + .content)
 			}
 		]' <<<"$REQUEST_JSON")
-	REQUEST_JSON=$(jq -c --argjson history "$TOOL_HISTORY_JSON" '.tool_history = $history' <<<"$REQUEST_JSON")
+	printf '%s' "$TOOL_HISTORY_JSON" >"$TOOL_HISTORY_FILE"
+	REQUEST_JSON=$(jq -c --slurpfile history "$TOOL_HISTORY_FILE" '.tool_history = $history[0]' <<<"$REQUEST_JSON")
 fi
 if [[ ${#TOOL_NAMES[@]} -gt 0 ]]; then
 	if [[ -n "${AGENT_SESSION_ID:-}" ]]; then
@@ -471,7 +473,8 @@ if [[ ${#TOOL_NAMES[@]} -gt 0 ]]; then
 	fi
 	INTERACTION_INDEX=0
 	while true; do
-		REQUEST_JSON=$(jq -c --argjson history "$TOOL_HISTORY_JSON" '.tool_history = $history' <<<"$REQUEST_JSON")
+		printf '%s' "$TOOL_HISTORY_JSON" >"$TOOL_HISTORY_FILE"
+		REQUEST_JSON=$(jq -c --slurpfile history "$TOOL_HISTORY_FILE" '.tool_history = $history[0]' <<<"$REQUEST_JSON")
 		printf '%s' "$REQUEST_JSON" >"$REQUEST_FILE"
 		build_request
 		printf '%s' "$REQ" >"$REQUEST_FILE"
@@ -499,7 +502,7 @@ if [[ ${#TOOL_NAMES[@]} -gt 0 ]]; then
 			exit 1
 		fi
 		INTERACTION_STEPS=$(jq -c '.steps' "$RAW_RESPONSE_FILE")
-		TOOL_HISTORY_JSON=$(jq -c --argjson steps "$INTERACTION_STEPS" '. + $steps' <<<"$TOOL_HISTORY_JSON")
+		TOOL_HISTORY_JSON=$(jq -c --slurpfile response "$RAW_RESPONSE_FILE" '. + $response[0].steps' <<<"$TOOL_HISTORY_JSON")
 		STEP_INDEX=0
 		while IFS= read -r interaction_step; do
 			if [[ -n "${AGENT_SESSION_ID:-}" ]]; then

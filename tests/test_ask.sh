@@ -164,8 +164,15 @@ curl() {
 		if [[ "${SEARCH_RESPONSE:-false}" == true ]]; then
 			printf 'data: %s\n\n' \
 				'{"event_type":"step.start","index":0,"step":{"type":"google_search_call","id":"search-1","arguments":{"queries":["space news"]}}}' \
-				'{"event_type":"step.start","index":1,"step":{"type":"google_search_result","call_id":"search-1","result":[]}}' \
-				'{"event_type":"step.delta","index":1,"delta":{"type":"google_search_result","result":[{"search_suggestions":"<a href=\"https://www.google.com/search?q=space\">More space news</a>"}]}}' \
+				'{"event_type":"step.start","index":1,"step":{"type":"google_search_result","call_id":"search-1","result":[]}}'
+			if [[ "${LARGE_SEARCH_RESPONSE:-false}" == true ]]; then
+				printf 'data: %s\n\n' "$(jq -cn --rawfile snippet "$TEST_DIRECTORY/large-search-result.txt" \
+					'{event_type:"step.delta",index:1,delta:{type:"google_search_result",result:[{snippet:$snippet}]}}')"
+			else
+				printf 'data: %s\n\n' \
+					'{"event_type":"step.delta","index":1,"delta":{"type":"google_search_result","result":[{"search_suggestions":"<a href=\"https://www.google.com/search?q=space\">More space news</a>"}]}}'
+			fi
+			printf 'data: %s\n\n' \
 				'{"event_type":"step.start","index":2,"step":{"type":"model_output","content":[]}}' \
 				'{"event_type":"step.delta","index":2,"delta":{"type":"text","text":"**Hello**"}}' \
 				'{"event_type":"step.delta","index":2,"delta":{"type":"text_annotation_delta","annotations":[{"type":"url_citation","url":"https://example.com/space-news","title":"Space Flight Weekly Recap"}]}}'
@@ -388,6 +395,12 @@ rg -q 'Space Flight Weekly Recap: https://example.com/space-news' "$TEST_DIRECTO
 rg -q '\[cited\]' "$TEST_DIRECTORY/output"
 rg -q 'More space news: https://www.google.com/search\?q=space' "$TEST_DIRECTORY/output"
 rg -q 'Search queries:' "$TEST_DIRECTORY/output"
+head -c 2100000 /dev/zero | tr '\0' x >"$TEST_DIRECTORY/large-search-result.txt"
+LARGE_SEARCH_RESPONSE=true ask gemini 'Large search result' --tools search </dev/null >"$TEST_DIRECTORY/output"
+rg -q 'Hello' "$TEST_DIRECTORY/output"
+head -c 2100000 /dev/zero >"$TEST_DIRECTORY/large-image.bin"
+ask gemini 'Search with a large image' --images "$TEST_DIRECTORY/large-image.bin" --tools search </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.input[-1].content[1].type == "image" and (.input[-1].content[1].data | length) >= 2800000'
 ask gemini 'Search or read notes' --tools search read </dev/null >"$TEST_DIRECTORY/output"
 assert_request '.tools[0] == {type:"google_search"} and .tools[1].type == "function" and .tools[1].name == "read"'
 unset SEARCH_RESPONSE
