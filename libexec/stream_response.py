@@ -404,8 +404,21 @@ class GeminiInteractionCollector:
                 indexed_step["arguments"] = delta["arguments"]
             elif delta_type == "text_annotation_delta":
                 content = indexed_step.get("content") or []
-                indexed_step["content"] = content
-                content.append({"type": "text", "text": "", "annotations": delta.get("annotations", [])})
+                annotations = delta.get("annotations")
+                if not isinstance(annotations, list):
+                    annotations = []
+                for text_content in reversed(content):
+                    if (
+                        isinstance(text_content, dict)
+                        and text_content.get("type") == "text"
+                        and isinstance(text_content.get("text"), str)
+                        and text_content["text"]
+                    ):
+                        existing_annotations = text_content.get("annotations")
+                        if not isinstance(existing_annotations, list):
+                            existing_annotations = []
+                        text_content["annotations"] = existing_annotations + annotations
+                        break
 
         if delta_type in ("arguments_delta", "function_call_arguments"):
             fragment = next(

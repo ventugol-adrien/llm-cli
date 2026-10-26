@@ -460,6 +460,18 @@ export AGENT_SESSION_ID='large-session'
 ask 'Continue session' </dev/null >"$TEST_DIRECTORY/output"
 assert_request '(.requests[0].messages[1].content | length) == 140000 and .requests[0].messages[2].content == "Continue session"'
 
+legacy_step=$(jq -cn '{
+	type: "model_output",
+	content: [
+		{type: "text", text: "Prior search answer"},
+		{type: "text", text: "", annotations: [{type: "url_citation", url: "https://example.test", title: "Example"}]}
+	]
+}')
+sqlite3 "$HOME/.local/share/llm-cli/.db" "INSERT INTO sessions (id) VALUES ('legacy-history'); INSERT INTO messages (session_id, role, content) VALUES ('legacy-history', 'assistant_step', '$legacy_step');"
+export AGENT_SESSION_ID='legacy-history'
+ask gemini 'Question after prior search' </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.input[0].type == "model_output" and [.input[0].content[] | select(.type == "text") | .text] == ["Prior search answer"]'
+
 export HTTP_ERROR=true
 expect_failure gemini 'HTTP failure'
 rg -q 'Gemini API error: .*test HTTP error' "$TEST_DIRECTORY/error"
@@ -704,6 +716,9 @@ citations = [{"type": "url_citation", "url": f"https://example.test/{i}", "title
 search_event({"event_type": "step.delta", "index": 2, "delta": {
 	"type": "text_annotation_delta", "annotations": citations,
 }})
+assert collector.steps[2]["content"] == [{
+	"type": "text", "text": "Answer once.", "annotations": citations,
+}]
 search_event({"event_type": "step.delta", "delta": {
 	"type": "url_context_result", "result": [
 		{"url": "https://example.test/0", "status": "success"},

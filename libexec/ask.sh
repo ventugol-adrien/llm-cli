@@ -433,7 +433,15 @@ if [[ "$HAS_TOOL_HISTORY" == true ]]; then
 			elif .role == "assistant" then
 				{type: "model_output", content: [{type: "text", text: .content}]}
 			elif .role == "assistant_step" or .role == "tool_result" then
-				.content | fromjson
+				.content | fromjson |
+				if .type == "model_output" and (.content | type) == "array" then
+					.content |= map(select(
+						.type != "text" or
+						((.text | type) == "string" and .text != "")
+					))
+				else
+					.
+				end
 			else
 				empty
 			end
