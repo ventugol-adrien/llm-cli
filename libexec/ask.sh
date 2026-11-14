@@ -388,7 +388,7 @@ REQUEST_JSON=$(printf '%s' "$MESSAGE" | jq -n \
 	--arg system_prompt "$SYSTEM" \
 	--rawfile message /dev/stdin \
 	--slurpfile session_messages "$SESSION_MESSAGES_FILE" \
-	'{ id: $id, session_events: $session_messages[0], messages: [
+	'{ id: $id, session_events: $session_messages[0], messages: ([
 			{ role: "system", content: $system_prompt }
 		] + [
 			$session_messages[0][] |
@@ -396,7 +396,7 @@ REQUEST_JSON=$(printf '%s' "$MESSAGE" | jq -n \
 			{role, content}
 		] + [
 			{ role: "user", content: $message }
-		] }')
+		]) }')
 
 if [[ ${#IMAGES[@]} -gt 0 ]]; then
 	for image in "${IMAGES[@]}"; do
@@ -645,7 +645,11 @@ if [[ -n "$SCHEMA_NAME" ]]; then
 fi
 
 if [[ "$VERBOSE" == true ]]; then
-	echo "Sending request $REQ_ID to $URL with body: $REQ"
+	if [[ "$PROVIDER" == llama && -n "${LLAMA_SOCKET:-}" ]]; then
+		echo "Sending request $REQ_ID to $URL via Unix socket $LLAMA_SOCKET with body: $REQ"
+	else
+		echo "Sending request $REQ_ID to $URL with body: $REQ"
+	fi
 fi
 
 if [[ "$IMAGE_GEN" == true ]]; then

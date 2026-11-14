@@ -8,7 +8,7 @@ search, structured JSON output, image generation, and session history.
 ## Requirements
 
 - Bash
-- Python 3 and the Python packages in [`requirements.txt`](./requirements.txt)
+- [`uv`](https://docs.astral.sh/uv/) (uses the pinned Python version and installs helper dependencies)
 - `curl`, `jq`, and `uuidgen`
 - `tail` and `xargs` for the `read` tool
 - `yq` to use JSON schemas
@@ -17,13 +17,15 @@ search, structured JSON output, image generation, and session history.
 - `sqlite3` when session history is enabled
 - `notify-send` for Grok image-generation notifications
 
-Install the Python dependency from the repository root:
+Set up the pinned Python environment and install dependencies from the
+repository root:
 
 ```bash
-python3 -m pip install -r requirements.txt
+uv sync
 ```
 
-Run the CLI directly, or add `bin/` to `PATH` and invoke `llm.sh`:
+The launcher uses `.venv/bin` for Python helper scripts when that environment
+exists. Run the CLI directly, or add `bin/` to `PATH` and invoke `llm.sh`:
 
 ```bash
 ./bin/llm.sh --help
@@ -186,6 +188,7 @@ Defaults describe an invocation without an override.
 | Variable | Default | Effect and scope |
 | --- | --- | --- |
 | `LLAMA_URL` | `http://localhost:8080` | Shared llama base URL for prompts and management. The CLI appends the appropriate endpoint; do not include `/v1/chat/completions`. A trailing slash is optional. |
+| `LLAMA_SOCKET` | Unset | Send llama prompts over this Unix-domain socket instead of `LLAMA_URL`. Management commands continue to use `LLAMA_URL`. |
 | `LLM_CLI_SCHEMA_DIRECTORY` | `$HOME/.config/llm-cli/output_schemas` | Directory containing YAML schemas selected with `--schema`. |
 | `LLM_CLI_TOOL_DIR` | `$HOME/.config/llm-cli/tools` | First directory searched for tool definitions selected with `--tools`. The existing home development and repository fallback directories remain; see [Tool utilities](#tool-utilities). |
 | `SYSTEM` | Built-in Markdown instructions and generated machine context | A nonempty value replaces the default system prompt, without appending machine context. Unset or empty retains the default. Gemini still appends its existing provider-specific Bash/Python and credential-handling instructions. |
@@ -298,8 +301,10 @@ than silently losing data.
 
 ### Llama endpoint configuration
 
-Prompts and management commands share `LLAMA_URL`, defaulting to
-`http://localhost:8080` when unset or empty. The CLI appends these paths:
+Prompts and management commands use `LLAMA_URL`, defaulting to
+`http://localhost:8080` when unset or empty. Set `LLAMA_SOCKET` to send llama
+prompts over a Unix-domain socket instead; management commands continue to use
+`LLAMA_URL`. The CLI appends these paths:
 
 | Operation | Endpoint path |
 | --- | --- |
@@ -318,6 +323,13 @@ A base-path prefix is allowed and applies to every endpoint. For example,
 remove `/v1/chat/completions` from existing values. The location selector and
 per-location URL variables have been removed. Use named profiles with different
 `LLAMA_URL` values to switch servers.
+
+For llama chat requests over the package-managed Unix socket, set
+`LLAMA_SOCKET` in the profile:
+
+```bash
+LLAMA_SOCKET="${XDG_RUNTIME_DIR:-/tmp/llm-$(id -u)}/llama-shared.sock"
+```
 
 ## Session history
 

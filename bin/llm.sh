@@ -2,6 +2,11 @@
 set -eE
 
 SCRIPT_DIRECTORY="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_VENV_BIN="$SCRIPT_DIRECTORY/../.venv/bin"
+if [[ -x "$PROJECT_VENV_BIN/python3" ]]; then
+	PATH="$PROJECT_VENV_BIN:$PATH"
+	export PATH
+fi
 LLM_CLI_CONFIG="${LLM_CLI_CONFIG:-$HOME/.config/llm-cli}"
 LLM_CLI_PROFILE_DIR="${LLM_CLI_PROFILE_DIR:-$LLM_CLI_CONFIG/profiles}"
 LLM_CLI_HOOKS="${LLM_CLI_HOOKS:-$LLM_CLI_CONFIG/hooks}"

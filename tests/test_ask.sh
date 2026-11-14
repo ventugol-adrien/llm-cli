@@ -8,7 +8,7 @@ export TEST_DIRECTORY
 export HOME="$TEST_DIRECTORY/home"
 unset AGENT_SESSION_ID
 unset LLM_CLI_CONFIG LLM_CLI_PROFILE_DIR LLM_CLI_HOOKS PROFILE
-unset LLAMA_URL SYSTEM LLM_CLI_TOOL_DIR
+unset LLAMA_URL LLAMA_SOCKET SYSTEM LLM_CLI_TOOL_DIR
 mkdir -p "$TEST_DIRECTORY/schemas"
 printf '%s\n' \
 	'type: object' \
@@ -55,11 +55,15 @@ notify-send() {
 }
 
 curl() {
-	local url='' output='' body='' header=''
+	local url='' socket='' output='' body='' header=''
 	local grok_header
 	grok_header=$(printf '%s: %s %s' 'Authorization' 'Bearer' 'test-key-not-a-real-secret')
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--unix-socket)
+			socket="$2"
+			shift 2
+			;;
 		-o)
 			output="$2"
 			shift 2
@@ -93,6 +97,7 @@ curl() {
 	fi
 	cp "$body" "$TEST_DIRECTORY/request.json"
 	printf '%s' "$url" >"$TEST_DIRECTORY/url"
+	printf '%s' "$socket" >"$TEST_DIRECTORY/socket"
 	if [[ "${HTTP_ERROR:-}" == true ]]; then
 		printf '%s\n' '{' '  "error": {' '    "message": "test HTTP error"' '  }' '}'
 		return 22
@@ -306,8 +311,15 @@ assert_request '.messages[0].role == "system" and (.messages[0].content | contai
 rg -q '^TTFT: .* \| TPS: .* \| Total tokens: 10$' "$TEST_DIRECTORY/output"
 ask llama 'Select a model' --model qwen-test </dev/null >"$TEST_DIRECTORY/output"
 assert_request '.model == "qwen-test"'
+LLAMA_SOCKET="$TEST_DIRECTORY/llama.sock" ask llama 'Unix socket prompt' --verbose \
+	</dev/null >"$TEST_DIRECTORY/output"
+[[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost/v1/chat/completions' ]]
+[[ "$(<"$TEST_DIRECTORY/socket")" == "$TEST_DIRECTORY/llama.sock" ]]
+rg -q "via Unix socket $TEST_DIRECTORY/llama.sock" "$TEST_DIRECTORY/output"
+assert_request '.messages[-1] == {role: "user", content: "Unix socket prompt"}'
 LLAMA_URL='' SYSTEM='' ask llama 'Empty overrides use defaults' </dev/null >"$TEST_DIRECTORY/output"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost:8080/v1/chat/completions' ]]
+[[ -z "$(<"$TEST_DIRECTORY/socket")" ]]
 assert_request '(.messages[0].content | contains("CommonMark") and contains("Environment context:"))'
 LLAMA_URL='http://localhost:9090' ask llama 'Custom server' </dev/null >"$TEST_DIRECTORY/output"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost:9090/v1/chat/completions' ]]

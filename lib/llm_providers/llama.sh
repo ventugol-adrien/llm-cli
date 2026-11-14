@@ -11,7 +11,11 @@ add_image() {
 }
 
 build_request() {
-	URL="$(llama:base_url)/v1/chat/completions"
+	if [[ -n "${LLAMA_SOCKET:-}" ]]; then
+		URL="http://localhost/v1/chat/completions"
+	else
+		URL="$(llama:base_url)/v1/chat/completions"
+	fi
 
 	REQ=$(jq -cn \
 		--arg model "$MODEL" \
@@ -43,8 +47,7 @@ build_request() {
 					)
 				]
 			),
-			max_tokens: 1024,
-			temperature: 0,
+			temperature: 0.6,
 			stream: true,
 			stream_options: {include_usage: true}
 		} +
@@ -56,7 +59,11 @@ build_request() {
 }
 
 send_request() {
-	curl --fail-with-body -N -sS -X POST "$URL" \
+	local -a socket_args=()
+	if [[ -n "${LLAMA_SOCKET:-}" ]]; then
+		socket_args=(--unix-socket "$LLAMA_SOCKET")
+	fi
+	curl --fail-with-body -N -sS "${socket_args[@]}" -X POST "$URL" \
 		-H "Content-Type: application/json" \
 		--data-binary "@$REQUEST_FILE"
 }
