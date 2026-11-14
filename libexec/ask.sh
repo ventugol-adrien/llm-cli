@@ -11,8 +11,7 @@ USAGE="llm ${LLM_CLI_PROVIDER:-llama} \"message\" [options]
 	--stream [true|false]   Stream the response (default true; false for Grok/Gemini)
 	--schema NAME           Use NAME.yaml from the output schema directory
   -m, --model MODEL        Override the backend model
-  -l, --location LOCATION  local, desktop, or remote (llama only)
-  -i, --images PATH...     Attach local images or HTTP(S) URLs
+  -i, --image, --images PATH... Attach local images or HTTP(S) URLs
   -f, --files PATH...      Attach local text files or HTTP(S) URLs
   -v, --verbose           Show request details
   -h, --help              Show this help
@@ -23,7 +22,6 @@ Gemini has no min_p equivalent; that setting remains llama-only."
 
 MESSAGE=""
 MODEL=""
-LOCATION=""
 PROVIDER="${LLM_CLI_PROVIDER:-llama}"
 case "$PROVIDER" in
 llama | gemini | grok) ;;
@@ -112,19 +110,11 @@ while [[ $# -gt 0 ]]; do
 		MODEL="$2"
 		shift 2
 		;;
-	-l | --location)
-		if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
-			echo "$flag requires a location" >&2
-			exit 1
-		fi
-		LOCATION="$2"
-		shift 2
-		;;
 	-v | --verbose)
 		VERBOSE=true
 		shift
 		;;
-	-i | --images)
+	-i | --image | --images)
 		shift
 		if [[ $# -eq 0 || "$1" == -* ]]; then
 			echo "$flag requires at least one image" >&2
@@ -172,7 +162,7 @@ find_tool_config() {
 	local candidate
 
 	for directory in \
-		"$HOME/.config/llm-cli/tools" \
+		"${LLM_CLI_TOOL_DIR:-$HOME/.config/llm-cli/tools}" \
 		"$HOME/dev/llm-cli/.config/tools" \
 		"$SCRIPT_DIRECTORY/../.config/tools"; do
 		candidate="$directory/$tool_name.yaml"
@@ -304,7 +294,7 @@ fi
 SCHEMA_NAME=""
 SCHEMA_JSON='null'
 if [[ -n "$SCHEMA" ]]; then
-	SCHEMA_DIRECTORY="${LLM_CLI_SCHEMA_DIRECTORY:-/home/adrien/.config/llm-cli/output_schemas}"
+	SCHEMA_DIRECTORY="${LLM_CLI_SCHEMA_DIRECTORY:-$HOME/.config/llm-cli/output_schemas}"
 	case "$SCHEMA" in
 	*.yaml)
 		SCHEMA_NAME="${SCHEMA%.yaml}"
@@ -334,13 +324,12 @@ if [[ ! -t 0 ]]; then
 fi
 
 source "$SCRIPT_DIRECTORY/../lib/llm_providers/$PROVIDER.sh"
-MESSAGE_METADATA=$(jq -cn --arg model "$MODEL" '{model: $model}')
+MESSAGE_METADATA=$(jq -cn --arg model "$MODEL" 'if $model != "" then {model: $model} else {} end')
 
 if [[ "$VERBOSE" == true ]]; then
 	echo "Message: $MESSAGE"
 	echo "Backend: $PROVIDER"
 	echo "Model: $MODEL"
-	echo "Location: $LOCATION"
 	echo "Images: ${IMAGES[*]}"
 	echo "Files: ${FILES[*]}"
 	echo "Tools: ${TOOL_NAMES[*]}"
@@ -349,7 +338,40 @@ if [[ "$VERBOSE" == true ]]; then
 fi
 
 REQ_ID="$(uuidgen)"
-SYSTEM="Help the user with their query. Respond only with clean, readable CommonMark Markdown. Your response is parsed and rendered in a TTY using Python Rich Live and Rich Markdown. Use headings, paragraphs, lists, tables, fenced code blocks, bold, and italics where appropriate. Do not emit raw ANSI escape sequences. Rich does not render LaTeX: never use dollar-sign math delimiters or LaTeX commands such as \\text or \\rightarrow. Use plain text, Unicode symbols and emojis instead, such as ✓ and →."
+if [[ -z "${SYSTEM:-}" ]]; then
+	CURRENT_USER="$(id -un)"
+	OS_NAME=$(awk -F= '$1 == "PRETTY_NAME" {gsub(/"/, "", $2); print $2; exit}' /etc/os-release 2>/dev/null)
+	if [[ -z "$OS_NAME" ]]; then
+		OS_NAME="$(uname -s)"
+	fi
+	CPU_NAME=$(awk -F: '/^model name[[:space:]]*:/ {sub(/^[[:space:]]*/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null)
+	if [[ -z "$CPU_NAME" ]]; then
+		CPU_NAME="$(uname -p)"
+	fi
+	GPU_NAME=""
+	if command -v nvidia-smi >/dev/null 2>&1; then
+		if gpu_names=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null) && [[ -n "$gpu_names" ]]; then
+			GPU_NAME=$(printf '%s\n' "$gpu_names" | awk 'NF {printf "%s%s", separator, $0; separator=", "}')
+		fi
+	fi
+	if [[ -z "$GPU_NAME" ]] && command -v lspci >/dev/null 2>&1; then
+		GPU_NAME=$(lspci 2>/dev/null | awk -F': ' '/VGA compatible controller|3D controller|Display controller/ {printf "%s%s", separator, $NF; separator=", "}')
+	fi
+	if [[ -z "$GPU_NAME" ]]; then
+		GPU_NAME="Not detected"
+	fi
+	SYSTEM_CONTEXT="Environment context:
+- Linux kernel: $(uname -r)
+- Operating system: $OS_NAME
+- USER environment variable: ${USER:-unknown}
+- Current user: $CURRENT_USER
+- CPU: ${CPU_NAME:-Unknown}
+- GPU: $GPU_NAME
+- Current working directory: $PWD"
+	SYSTEM="Help the user with their query. Respond only with clean, readable CommonMark Markdown. Your response is parsed and rendered in a TTY using Python Rich Live and Rich Markdown. Use headings, paragraphs, lists, tables, fenced code blocks, bold, and italics where appropriate. Do not emit raw ANSI escape sequences. Rich does not render LaTeX: never use dollar-sign math delimiters or LaTeX commands such as \\text or \\rightarrow. Use plain text, Unicode symbols and emojis instead, such as ✓ and →.
+
+$SYSTEM_CONTEXT"
+fi
 ASSET_TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$ASSET_TEMP_DIR"' EXIT
 

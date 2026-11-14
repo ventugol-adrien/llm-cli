@@ -3,7 +3,6 @@ set -e
 set -o pipefail
 
 USAGE="llm manage <pause|resume|swap> [options]"
-LOCATION="desktop"
 VERBOSE=false
 
 usage() {
@@ -17,7 +16,6 @@ Commands:
     status                        Show the current model status and config
 
 Options:
-  -l, --location LOCATION       API location: local, desktop, or remote
   -v, --verbose                 Print the request before sending it
 
 Swap options:
@@ -58,11 +56,6 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             exit 0
-            ;;
-        -l|--location)
-            [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
-            LOCATION="$2"
-            shift 2
             ;;
         -v|--verbose)
             VERBOSE=true
@@ -114,7 +107,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/llama_urls.sh"
-API_URL=$(llama:base_url "$LOCATION") || exit 1
+API_URL=$(llama:base_url) || exit 1
 
 case "$COMMAND" in
     status)

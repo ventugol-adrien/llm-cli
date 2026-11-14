@@ -4,11 +4,6 @@ else
 	MODEL="${MODEL:-grok-4.7}"
 fi
 
-if [[ -n "$LOCATION" ]]; then
-	echo "--location is only supported by the llama backend" >&2
-	exit 1
-fi
-
 add_image() {
 	local mime_type
 	mime_type=$(file --brief --mime-type -- "$1")

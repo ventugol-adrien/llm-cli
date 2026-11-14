@@ -85,7 +85,7 @@ class TerminalWriter:
         self.last_answer_at: float | None = None
         if self.console.is_terminal:
             self.status = self.console.status(
-                status_label or f"Waiting for {provider}", spinner="dots"
+                status_label or f"Waiting for {provider} ✦︎", spinner="dots"
             )
             self.status.start()
 
@@ -114,7 +114,11 @@ class TerminalWriter:
         label, field = activity
         arguments = step.get("arguments")
         values = arguments.get(field) if isinstance(arguments, dict) else None
-        details = ", ".join(value for value in values if isinstance(value, str)) if isinstance(values, list) else ""
+        details = (
+            ", ".join(value for value in values if isinstance(value, str))
+            if isinstance(values, list)
+            else ""
+        )
         message = Text(f"{label}: {details}" if details else f"{label}...")
         if self.thinking:
             self.console.print()
@@ -188,7 +192,10 @@ class TerminalWriter:
             return
         known_uris = {uri for uri, _ in self.sources}
         for annotation in annotations:
-            if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+            if (
+                not isinstance(annotation, dict)
+                or annotation.get("type") != "url_citation"
+            ):
                 continue
             uri = annotation.get("url")
             title = annotation.get("title")
@@ -216,7 +223,11 @@ class TerminalWriter:
             if step.get("is_error"):
                 print("Gemini Google Search reported an error", file=sys.stderr)
             for result in step.get("result") or []:
-                html = result.get("search_suggestions") if isinstance(result, dict) else None
+                html = (
+                    result.get("search_suggestions")
+                    if isinstance(result, dict)
+                    else None
+                )
                 if not isinstance(html, str):
                     continue
                 parser = SearchSuggestionParser()
@@ -231,7 +242,9 @@ class TerminalWriter:
             for result in step.get("result") or []:
                 if isinstance(result, dict) and isinstance(result.get("url"), str):
                     status = result.get("status")
-                    self.url_retrievals[result["url"]] = status if isinstance(status, str) else "unknown"
+                    self.url_retrievals[result["url"]] = (
+                        status if isinstance(status, str) else "unknown"
+                    )
 
     def finish(self) -> None:
         if self.status is not None:
@@ -267,12 +280,20 @@ class TerminalWriter:
                 status = self.url_retrievals.get(uri)
                 label = "cited"
                 if status is not None:
-                    label += "; retrieved" if status == "success" else f"; retrieval: {status}"
+                    label += (
+                        "; retrieved"
+                        if status == "success"
+                        else f"; retrieval: {status}"
+                    )
                 self.console.print(f"- {title}: {uri} [{label}]", markup=False)
             cited_urls = {url for url, _ in self.sources}
             for url, status in self.url_retrievals.items():
                 if url not in cited_urls:
-                    label = "retrieved; not cited" if status == "success" else f"retrieval: {status}; not cited"
+                    label = (
+                        "retrieved; not cited"
+                        if status == "success"
+                        else f"retrieval: {status}; not cited"
+                    )
                     self.console.print(f"- {url} [{label}]", markup=False)
 
         if self.search_queries:
@@ -280,7 +301,11 @@ class TerminalWriter:
             for query in self.search_queries:
                 self.console.print(f"- {query}", markup=False)
         if self.search_suggestions:
-            self.console.print("Search suggestions (not evidence of retrieval):", style="bold", markup=False)
+            self.console.print(
+                "Search suggestions (not evidence of retrieval):",
+                style="bold",
+                markup=False,
+            )
             for url, title in self.search_suggestions:
                 self.console.print(f"- {title}: {url}", markup=False)
 
@@ -382,17 +407,23 @@ class GeminiInteractionCollector:
         if not isinstance(step_id, str):
             step_id = ""
 
-        indexed_step = self.steps_by_index.get(step_index) if type(step_index) is int else None
+        indexed_step = (
+            self.steps_by_index.get(step_index) if type(step_index) is int else None
+        )
         if indexed_step is not None:
             if delta_type == "text" and isinstance(delta.get("text"), str):
                 content = indexed_step.get("content") or []
                 indexed_step["content"] = content
                 content.append(dict(delta))
-            elif delta_type == "thought_summary" and isinstance(delta.get("content"), dict):
+            elif delta_type == "thought_summary" and isinstance(
+                delta.get("content"), dict
+            ):
                 summary = indexed_step.get("summary") or []
                 indexed_step["summary"] = summary
                 summary.append(dict(delta["content"]))
-            elif delta_type == "thought_signature" and isinstance(delta.get("signature"), str):
+            elif delta_type == "thought_signature" and isinstance(
+                delta.get("signature"), str
+            ):
                 indexed_step["signature"] = delta["signature"]
             elif delta_type in ("google_search_result", "url_context_result"):
                 results = indexed_step.get("result") or []
@@ -400,7 +431,10 @@ class GeminiInteractionCollector:
                 for field in ("signature", "is_error"):
                     if field in delta:
                         indexed_step[field] = delta[field]
-            elif delta_type in ("google_search_call", "url_context_call") and isinstance(delta.get("arguments"), dict):
+            elif delta_type in (
+                "google_search_call",
+                "url_context_call",
+            ) and isinstance(delta.get("arguments"), dict):
                 indexed_step["arguments"] = delta["arguments"]
             elif delta_type == "text_annotation_delta":
                 content = indexed_step.get("content") or []
@@ -503,12 +537,9 @@ class GeminiInteractionCollector:
                 for step in self.steps
                 if step.get("type") == "model_output"
                 for content in (
-                    step.get("content")
-                    if isinstance(step.get("content"), list)
-                    else []
+                    step.get("content") if isinstance(step.get("content"), list) else []
                 )
-                if isinstance(content, dict)
-                and isinstance(content.get("text"), str)
+                if isinstance(content, dict) and isinstance(content.get("text"), str)
             )
             if output_text:
                 terminal.write_token(output_text)
@@ -648,7 +679,11 @@ def render_event(
                 text = content.get("text") if isinstance(content, dict) else None
                 if isinstance(text, str) and text:
                     terminal.write_reasoning(text)
-            elif delta_type in ("arguments_delta", "function_call_arguments", "function_call"):
+            elif delta_type in (
+                "arguments_delta",
+                "function_call_arguments",
+                "function_call",
+            ):
                 if delta.get("arguments"):
                     terminal.record_output_timing()
             return
@@ -657,13 +692,17 @@ def render_event(
             step = payload.get("step")
             if isinstance(step, dict) and step.get("type") == "thought":
                 for content in step.get("summary") or []:
-                    if isinstance(content, dict) and isinstance(content.get("text"), str):
+                    if isinstance(content, dict) and isinstance(
+                        content.get("text"), str
+                    ):
                         terminal.write_reasoning(content["text"])
 
         if event_type == "interaction.completed":
             status = interaction.get("status")
-            if status and status != "completed" and not (
-                status == "requires_action" and collector is not None
+            if (
+                status
+                and status != "completed"
+                and not (status == "requires_action" and collector is not None)
             ):
                 raise RuntimeError(f"Gemini interaction ended with status: {status}")
             terminal.stop_status()
@@ -675,7 +714,7 @@ def render_event(
                 if isinstance(content, dict) and isinstance(content.get("text"), str)
             )
             if summaries.startswith(terminal.reasoning):
-                remainder = summaries[len(terminal.reasoning):]
+                remainder = summaries[len(terminal.reasoning) :]
                 if remainder:
                     terminal.write_reasoning(remainder)
             return
@@ -702,6 +741,43 @@ def render_event(
                     elif step_type == "model_output":
                         terminal.write_token(text)
                         terminal.add_url_citations(content.get("annotations"))
+        return
+
+    if error := payload.get("error"):
+        message = error.get("message", error) if isinstance(error, dict) else error
+        raise RuntimeError(f"Llama API error: {message}")
+
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            output = choice.get("delta") or choice.get("message")
+            if not isinstance(output, dict):
+                continue
+            reasoning = output.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning:
+                terminal.write_reasoning(reasoning)
+            content = output.get("content")
+            if isinstance(content, str) and content:
+                terminal.write_token(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if (
+                        isinstance(part, dict)
+                        and part.get("type") == "text"
+                        and isinstance(part.get("text"), str)
+                    ):
+                        terminal.write_token(part["text"])
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            for source, target in (
+                ("completion_tokens", "candidatesTokenCount"),
+                ("total_tokens", "totalTokenCount"),
+            ):
+                count = usage.get(source)
+                if type(count) is int and count >= 0:
+                    terminal.usage[target] = count
         return
 
     reasoning = payload.get("reasoning")
@@ -732,7 +808,9 @@ def main() -> int:
     )
     if args.interaction_file is not None and args.provider != "gemini":
         parser.error("--interaction-file is only supported by the Gemini provider")
-    collector = GeminiInteractionCollector() if args.interaction_file is not None else None
+    collector = (
+        GeminiInteractionCollector() if args.interaction_file is not None else None
+    )
     data_lines: list[str] = []
     raw_json_lines: list[str] = []
 
@@ -755,16 +833,14 @@ def main() -> int:
                     raw_json_lines.clear()
                 data = line[5:]
                 data_lines.append(data[1:] if data.startswith(" ") else data)
-            elif args.provider in ("gemini", "grok") and (
+            elif args.provider in ("gemini", "grok", "llama") and (
                 raw_json_lines or line.lstrip().startswith("{")
             ):
                 raw_json_lines.append(line)
 
         render_event("\n".join(data_lines), terminal, args.provider, collector)
         if raw_json_lines:
-            render_event(
-                "\n".join(raw_json_lines), terminal, args.provider, collector
-            )
+            render_event("\n".join(raw_json_lines), terminal, args.provider, collector)
         interaction_result = collector.build(terminal) if collector else None
         if (
             args.provider in ("gemini", "grok")

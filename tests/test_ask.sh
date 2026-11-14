@@ -7,9 +7,8 @@ trap 'rm -rf "$TEST_DIRECTORY"' EXIT
 export TEST_DIRECTORY
 export HOME="$TEST_DIRECTORY/home"
 unset AGENT_SESSION_ID
-export LLM_CLI_LLAMA_LOCAL_URL='http://local.example.test:8000/custom-api'
-export LLM_CLI_LLAMA_DESKTOP_URL='https://desktop.example.test/custom-api/'
-export LLM_CLI_LLAMA_REMOTE_URL='https://remote.example.test/custom-api'
+unset LLM_CLI_CONFIG LLM_CLI_PROFILE_DIR LLM_CLI_HOOKS PROFILE
+unset LLAMA_URL SYSTEM LLM_CLI_TOOL_DIR
 mkdir -p "$TEST_DIRECTORY/schemas"
 printf '%s\n' \
 	'type: object' \
@@ -199,12 +198,16 @@ curl() {
 			printf '%s' 'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":6,"total_tokens":10}}}'
 		fi
 	else
-		if jq -e '.requests[0].response_format' "$TEST_DIRECTORY/request.json" >/dev/null 2>&1; then
-			printf 'data: %s\n\n' "$(jq -cn --arg token '{"result":true}' '{token: $token}')"
-			printf '%s\n\n' 'data: [DONE]'
+		if jq -e '.response_format' "$TEST_DIRECTORY/request.json" >/dev/null 2>&1; then
+			printf 'data: %s\n\n' "$(jq -cn --arg content '{"result":true}' \
+				'{choices:[{delta:{content:$content}}]}')"
 		else
-			printf '%s\n\n' 'data: {"reasoning":"Thinking..."}' 'data: {"token":"**Hello**"}' 'data: {"token":" world"}' 'data: [DONE]'
+			printf '%s\n\n' \
+				'data: {"choices":[{"delta":{"reasoning_content":"Thinking..."}}]}' \
+				'data: {"choices":[{"delta":{"content":"**Hello**"}}]}' \
+				'data: {"choices":[{"delta":{"content":" world"}}]}'
 		fi
+		printf '%s\n\n' 'data: {"choices":[],"usage":{"completion_tokens":3,"total_tokens":10}}' 'data: [DONE]'
 	fi
 }
 export -f curl notify-send secret-tool
@@ -249,7 +252,7 @@ bash "$ROOT/llm.sh" --help >"$TEST_DIRECTORY/output"
 rg -q 'llama\|gemini\|grok' "$TEST_DIRECTORY/output"
 printf 'piped "context"\n' | ask grok 'Hello' --verbose >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'https://api.x.ai/v1/responses' ]]
-assert_request '.model == "grok-4.7" and .stream == true and .store == false and (has("tools") | not) and .input[0].role == "system" and (.input[0].content | contains("CommonMark")) and .input[1].content[0] == {type: "input_text", text: "Hello\n\npiped \"context\"\n"}'
+assert_request '.model == "grok-4.7" and .stream == true and .store == false and (has("tools") | not) and .input[0].role == "system" and (.input[0].content | contains("CommonMark")) and (.input[0].content as $system | ["Linux kernel:", "Operating system:", "USER environment variable:", "Current user:", "CPU:", "GPU:", "Current working directory:"] | all(.[]; . as $label | $system | contains($label))) and .input[1].content[0] == {type: "input_text", text: "Hello\n\npiped \"context\"\n"}'
 rg -q 'Hello.*world' "$TEST_DIRECTORY/output"
 rg -q 'Total tokens: 10' "$TEST_DIRECTORY/output"
 if rg -q 'test-key-not-a-real-secret' "$TEST_DIRECTORY/output" "$TEST_DIRECTORY/error"; then
@@ -285,6 +288,8 @@ ask grok --schema boolean 'Structured' </dev/null >"$TEST_DIRECTORY/output"
 assert_request '.text.format == {type: "json_schema", name: "boolean", schema: {type: "object", properties: {result: {type: "boolean"}}, required: ["result"], additionalProperties: false}, strict: true}'
 rg -q '^\{$' "$TEST_DIRECTORY/output"
 rg -q '^  "result": true$' "$TEST_DIRECTORY/output"
+ask grok 'Describe this picture' --image "$TEST_DIRECTORY/image.png" </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.input[-1].content[0] == {type: "input_text", text: "Describe this picture"} and .input[-1].content[1] == {type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5x8AAAAASUVORK5CYII="}'
 ask grok --image-gen 'A collage of London landmarks' </dev/null >"$TEST_DIRECTORY/output"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'https://api.x.ai/v1/images/generations' ]]
 assert_request '.model == "grok-imagine-image-2.0" and .prompt == "A collage of London landmarks"'
@@ -294,54 +299,132 @@ ask grok --image-gen 'Custom model prompt' --model grok-image-custom </dev/null 
 assert_request '.model == "grok-image-custom" and .prompt == "Custom model prompt"'
 expect_failure gemini --image-gen 'Unsupported'
 expect_failure grok --image-gen --search 'Unsupported combination'
-for location in desktop local remote; do
-	ask 'Hello' --location "$location" --verbose </dev/null >"$TEST_DIRECTORY/output"
-	rg -q 'Thinking\.\.\.' "$TEST_DIRECTORY/output"
-	assert_request '.requests[0].messages[0].content | (contains("Prefer Bash") or contains("suggest Python") or contains("$(secret-tool lookup service gemini key api_key)")) | not'
-	assert_request '.model == "gemma4-31bunc" and .requests[0].temperature == 0.9 and .requests[0].min_p == 0.8 and .requests[0].max_tokens == 4096 and .requests[0].thinking_budget_tokens == 2048 and .requests[0].chat_template_kwargs.enable_thinking == true'
-	case "$location" in
-	desktop) expected_url='https://desktop.example.test/custom-api/stream-multiplex/' ;;
-	local) expected_url='http://local.example.test:8000/custom-api/stream-multiplex/' ;;
-	remote) expected_url='https://remote.example.test/custom-api/stream-multiplex/' ;;
+ask 'Hello' --verbose </dev/null >"$TEST_DIRECTORY/output"
+rg -q 'Thinking\.\.\.' "$TEST_DIRECTORY/output"
+assert_request '.messages[0].role == "system" and (.messages[0].content | contains("CommonMark")) and (.messages[0].content as $system | ["Linux kernel:", "Operating system:", "USER environment variable:", "Current user:", "CPU:", "GPU:", "Current working directory:"] | all(.[]; . as $label | $system | contains($label))) and .messages[-1] == {role: "user", content: "Hello"} and .temperature == 0 and .max_tokens == 1024 and .stream == true and .stream_options.include_usage == true and (has("model") | not)'
+[[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost:8080/v1/chat/completions' ]]
+rg -q '^TTFT: .* \| TPS: .* \| Total tokens: 10$' "$TEST_DIRECTORY/output"
+ask llama 'Select a model' --model qwen-test </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.model == "qwen-test"'
+LLAMA_URL='' SYSTEM='' ask llama 'Empty overrides use defaults' </dev/null >"$TEST_DIRECTORY/output"
+[[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost:8080/v1/chat/completions' ]]
+assert_request '(.messages[0].content | contains("CommonMark") and contains("Environment context:"))'
+LLAMA_URL='http://localhost:9090' ask llama 'Custom server' </dev/null >"$TEST_DIRECTORY/output"
+[[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost:9090/v1/chat/completions' ]]
+expect_failure llama 'Location is no longer an option' --location local
+
+mkdir -p "$HOME/.config/llm-cli/profiles" "$TEST_DIRECTORY/profile tools" \
+	"$TEST_DIRECTORY/profile schemas" "$HOME/.config/llm-cli/output_schemas" \
+	"$HOME/.config/llm-cli/tools" "$HOME/dev/llm-cli/.config/tools"
+cat >"$HOME/.config/llm-cli/profiles/configured.env" <<'PROFILE'
+LLAMA_URL='https://profile.example.test/custom-api/'
+LLM_CLI_SCHEMA_DIRECTORY="$TEST_DIRECTORY/profile schemas"
+LLM_CLI_TOOL_DIR="$TEST_DIRECTORY/profile tools"
+SYSTEM='Profile instructions: "quoted" $literal.
+Keep answers brief.'
+PROFILE
+printf '%s\n' 'type: object' 'title: ProfileSchema' \
+	>"$TEST_DIRECTORY/profile schemas/profile.yaml"
+printf '%s\n' 'type: object' 'title: HomeSchema' \
+	>"$HOME/.config/llm-cli/output_schemas/home.yaml"
+printf '%s\n' 'type: function' 'name: read' 'description: Profile read tool' \
+	'parameters: {type: object}' >"$TEST_DIRECTORY/profile tools/read.yaml"
+printf '%s\n' 'type: function' 'name: read' 'description: Home fallback read tool' \
+	'parameters: {type: object}' >"$HOME/dev/llm-cli/.config/tools/read.yaml"
+printf '%s\n' 'type: google_search' >"$HOME/.config/llm-cli/tools/home_only.yaml"
+custom_system='Profile instructions: "quoted" $literal.
+Keep answers brief.'
+for provider in llama gemini grok; do
+	LOCATION=unused SYSTEM='Caller instructions' \
+		bash "$ROOT/bin/llm.sh" --profile configured "$provider" 'Profile configuration' --schema profile \
+		</dev/null >"$TEST_DIRECTORY/output"
+	case "$provider" in
+	llama)
+		[[ "$(<"$TEST_DIRECTORY/url")" == 'https://profile.example.test/custom-api/v1/chat/completions' ]]
+		jq -e --arg system "$custom_system" \
+			'.messages[0].content == $system and .response_format.json_schema.schema.title == "ProfileSchema"' \
+			"$TEST_DIRECTORY/request.json" >/dev/null
+		;;
+	gemini)
+		jq -e --arg system "$custom_system" \
+			'(.system_instruction | startswith($system + "\n\n") and contains("Prefer Bash") and (contains("Environment context:") | not)) and .response_format.schema.title == "ProfileSchema"' \
+			"$TEST_DIRECTORY/request.json" >/dev/null
+		;;
+	grok)
+		jq -e --arg system "$custom_system" \
+			'.input[0].content == $system and .text.format.schema.title == "ProfileSchema"' \
+			"$TEST_DIRECTORY/request.json" >/dev/null
+		;;
 	esac
-	[[ "$(<"$TEST_DIRECTORY/url")" == "$expected_url" ]]
+	LLM_CLI_SCHEMA_DIRECTORY='' ask "$provider" 'Home-relative schema' --schema home \
+		</dev/null >"$TEST_DIRECTORY/output"
+	assert_request '[.. | objects | select(.title? == "HomeSchema")] | length == 1'
 done
 (
-	unset LLM_CLI_LLAMA_LOCAL_URL LLM_CLI_LLAMA_DESKTOP_URL LLM_CLI_LLAMA_REMOTE_URL
-	for location in local desktop remote; do
-		expect_failure llama 'Missing endpoint' --location "$location"
-		rg -q "Set LLM_CLI_LLAMA_${location^^}_URL" "$TEST_DIRECTORY/error"
-	done
-	export LLM_CLI_LLAMA_DESKTOP_URL=''
-	expect_failure llama 'Empty endpoint'
-	rg -q 'Set LLM_CLI_LLAMA_DESKTOP_URL' "$TEST_DIRECTORY/error"
-	ask gemini 'No llama configuration needed' </dev/null >"$TEST_DIRECTORY/output"
-	ask grok 'No llama configuration needed' </dev/null >"$TEST_DIRECTORY/output"
-	export LLM_CLI_LLAMA_LOCAL_URL='http://only-local.example.test/api/'
-	ask llama 'Only selected location needs configuration' --location local </dev/null >"$TEST_DIRECTORY/output"
-	[[ "$(<"$TEST_DIRECTORY/url")" == 'http://only-local.example.test/api/stream-multiplex/' ]]
+	unset LLM_CLI_SCHEMA_DIRECTORY
+	ask llama 'Unset schema directory' --schema home </dev/null >"$TEST_DIRECTORY/output"
+	assert_request '.response_format.json_schema.schema.title == "HomeSchema"'
 )
+bash "$ROOT/bin/llm.sh" --profile configured gemini 'Configured tool priority and repository fallback' \
+	--tools read search </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.tools[0].description == "Profile read tool" and .tools[1] == {type: "google_search"}'
+LLM_CLI_TOOL_DIR="$TEST_DIRECTORY/no tools here" ask gemini 'Home fallback tool' --tools read \
+	</dev/null >"$TEST_DIRECTORY/output"
+assert_request '.tools[0].description == "Home fallback read tool"'
+LLM_CLI_TOOL_DIR='' ask gemini 'Default tool directory' --tools home_only \
+	</dev/null >"$TEST_DIRECTORY/output"
+assert_request '.tools == [{type: "google_search"}]'
+rm "$HOME/dev/llm-cli/.config/tools/read.yaml" "$HOME/.config/llm-cli/tools/home_only.yaml"
+
 (
 	curl() {
 		printf '%s\n' "$@" >"$TEST_DIRECTORY/manage-request"
-		printf '{}'
+		printf '%s\n' "$@" >>"$TEST_DIRECTORY/manage-calls"
+		printf '%s' '{"config":{"model":"server-model","params":"8b","context":4096,"vram":8,"agents":2}}'
 	}
 	export -f curl
-	for location in local desktop remote; do
-		bash "$ROOT/libexec/manage.sh" status --location "$location" >"$TEST_DIRECTORY/output"
-		case "$location" in
-		local) expected_base="${LLM_CLI_LLAMA_LOCAL_URL%/}" ;;
-		desktop) expected_base="${LLM_CLI_LLAMA_DESKTOP_URL%/}" ;;
-		remote) expected_base="${LLM_CLI_LLAMA_REMOTE_URL%/}" ;;
-		esac
+	bash "$ROOT/bin/llm.sh" manage status >"$TEST_DIRECTORY/output"
+	grep -Fxq 'http://localhost:8080/status' "$TEST_DIRECTORY/manage-request"
+	for base in '' 'http://localhost:9090' 'https://custom.example.test/api/'; do
+		export LLAMA_URL="$base"
+		expected_base="${base:-http://localhost:8080}"
+		expected_base="${expected_base%/}"
+		bash "$ROOT/bin/llm.sh" manage status >"$TEST_DIRECTORY/output"
 		grep -Fxq "$expected_base/status" "$TEST_DIRECTORY/manage-request"
+		grep -Fxq GET "$TEST_DIRECTORY/manage-request"
+		bash "$ROOT/bin/llm.sh" manage pause >"$TEST_DIRECTORY/output"
+		grep -Fxq "$expected_base/pause" "$TEST_DIRECTORY/manage-request"
+		grep -Fxq POST "$TEST_DIRECTORY/manage-request"
+		grep -Fxq '{}' "$TEST_DIRECTORY/manage-request"
+		bash "$ROOT/bin/llm.sh" manage resume --preserve-flux --clear-cpu-encoder --no-restart \
+			>"$TEST_DIRECTORY/output"
+		grep -Fxq "$expected_base/resume?preserve_flux=true&clear_cpu_encoder=true&restart=false" \
+			"$TEST_DIRECTORY/manage-request"
+		: >"$TEST_DIRECTORY/manage-calls"
+		bash "$ROOT/bin/llm.sh" manage swap >"$TEST_DIRECTORY/output"
+		grep -Fxq "$expected_base/status" "$TEST_DIRECTORY/manage-calls"
+		grep -Fxq "$expected_base/change-model/?preserve_flux=false&clear_cpu_encoder=false&restart=true" \
+			"$TEST_DIRECTORY/manage-request"
+		grep -Fxq '{"model":"server-model","params":"8b","context":4096,"vram":8,"agents":2}' \
+			"$TEST_DIRECTORY/manage-request"
 	done
-	unset LLM_CLI_LLAMA_DESKTOP_URL
-	if bash "$ROOT/libexec/manage.sh" status >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
-		echo 'Expected manage to reject a missing endpoint' >&2
+	bash "$ROOT/bin/llm.sh" --profile configured manage status >"$TEST_DIRECTORY/output"
+	grep -Fxq 'https://profile.example.test/custom-api/status' "$TEST_DIRECTORY/manage-request"
+	for flag in -l --location; do
+		: >"$TEST_DIRECTORY/manage-calls"
+		if bash "$ROOT/bin/llm.sh" manage status "$flag" local \
+			>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
+			echo "Expected manage to reject the removed $flag option" >&2
+			exit 1
+		fi
+		grep -Fq "Unknown option: $flag" "$TEST_DIRECTORY/error"
+		[[ ! -s "$TEST_DIRECTORY/manage-calls" ]]
+	done
+	bash "$ROOT/bin/llm.sh" manage --help >"$TEST_DIRECTORY/output"
+	if grep -Fq -- '--location' "$TEST_DIRECTORY/output"; then
+		echo 'Management help still advertises locations' >&2
 		exit 1
 	fi
-	rg -q 'Set LLM_CLI_LLAMA_DESKTOP_URL' "$TEST_DIRECTORY/error"
 )
 ask llama --buff 'Buffered llama response' </dev/null >"$TEST_DIRECTORY/output"
 [[ "$(<"$TEST_DIRECTORY/output")" == '**Hello** world' ]]
@@ -349,6 +432,12 @@ if rg -q 'Thinking|TTFT:' "$TEST_DIRECTORY/output"; then
 	echo 'Buffered llama response was preprocessed' >&2
 	exit 1
 fi
+printf '%s' '{"choices":[{"message":{"role":"assistant","content":"The answer is 4.","reasoning_content":"Thinking"}}],"usage":{"completion_tokens":2,"total_tokens":18}}' |
+	python3 "$ROOT/libexec/stream_response.py" --provider llama --buffered >"$TEST_DIRECTORY/output"
+[[ "$(<"$TEST_DIRECTORY/output")" == 'The answer is 4.' ]]
+printf '%s' '{"choices":[{"message":{"role":"assistant","content":"The answer is 4.","reasoning_content":"Thinking"}}],"usage":{"completion_tokens":2,"total_tokens":18}}' |
+	python3 "$ROOT/libexec/stream_response.py" --provider llama >"$TEST_DIRECTORY/output"
+rg -q '^TTFT: .* \| TPS: .* \| Total tokens: 18$' "$TEST_DIRECTORY/output"
 
 printf 'piped "context"\n' | ask gemini 'Hello' --verbose >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'https://generativelanguage.googleapis.com/v1beta/interactions' ]]
@@ -438,11 +527,11 @@ for provider in llama gemini; do
 	if [[ "$provider" == gemini ]]; then
 		assert_request '(.input | length) == 5 and .input[1].type == "image" and .input[1].mime_type == "image/png" and .input[1] == .input[2] and (.input[4].text | contains("file content\nwith \"quotes\"\n"))'
 	else
-		assert_request '(.requests[0].images | length) == 2 and .requests[0].images[0] == .requests[0].images[1] and (.requests[0].files | length) == 2 and .requests[0].files[1].content == "file content\nwith \"quotes\"\n"'
+		assert_request '(.messages[-1].content | length) == 5 and .messages[-1].content[0] == {type: "text", text: "Attachments"} and .messages[-1].content[1] == .messages[-1].content[2] and .messages[-1].content[1].image_url.url == "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5x8AAAAASUVORK5CYII=" and (.messages[-1].content[4].text | contains("file content\nwith \"quotes\"\n"))'
 	fi
 done
 ask --schema boolean 'Structured' </dev/null >"$TEST_DIRECTORY/output"
-assert_request '.requests[0].response_format == {type: "json_schema", json_schema: {name: "boolean", schema: {type: "object", properties: {result: {type: "boolean"}}, required: ["result"], additionalProperties: false}, strict: true}}'
+assert_request '.response_format == {type: "json_schema", json_schema: {name: "boolean", schema: {type: "object", properties: {result: {type: "boolean"}}, required: ["result"], additionalProperties: false}, strict: true}}'
 rg -q '^\{$' "$TEST_DIRECTORY/output"
 rg -q '^  "result": true$' "$TEST_DIRECTORY/output"
 
@@ -452,13 +541,13 @@ ask gemini 'Second question' </dev/null >"$TEST_DIRECTORY/output"
 assert_request '[.input[].text] == ["User: First question", "Assistant: **Hello** world", "User: Second question"]'
 [[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" 'SELECT count(*) FROM messages;')" == 4 ]]
 [[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" 'SELECT content FROM messages ORDER BY id DESC LIMIT 1;')" == '**Hello** world' ]]
-[[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" "SELECT count(*) FROM messages WHERE json_extract(metadata, '$.model') = 'gemma4-31bunc';")" == 2 ]]
+[[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" "SELECT count(*) FROM messages WHERE json_extract(metadata, '$.model') = 'gemma4-31bunc';")" == 0 ]]
 [[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" "SELECT count(*) FROM messages WHERE json_extract(metadata, '$.model') = 'gemini-flash-latest';")" == 2 ]]
 
 sqlite3 "$HOME/.local/share/llm-cli/.db" "INSERT INTO sessions (id) VALUES ('large-session'); INSERT INTO messages (session_id, role, content) VALUES ('large-session', 'user', replace(hex(zeroblob(140000)), '00', 'x'));"
 export AGENT_SESSION_ID='large-session'
 ask 'Continue session' </dev/null >"$TEST_DIRECTORY/output"
-assert_request '(.requests[0].messages[1].content | length) == 140000 and .requests[0].messages[2].content == "Continue session"'
+assert_request '(.messages[1].content | length) == 140000 and .messages[2].content == "Continue session"'
 
 legacy_step=$(jq -cn '{
 	type: "model_output",
@@ -666,7 +755,6 @@ for arguments, expected_error in (
 PYTHON
 
 (
-	LOCATION=""
 	source "$ROOT/lib/llm_providers/gemini.sh"
 	REQ='{"tools":[]}'
 	CUSTOM_TOOL='{"type":"function","name":"lookup","parameters":{"type":"object"}}'

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 APP_HOME="${HOME}/.local/share/llm-cli"
 DB="$APP_HOME/.db"
+LLM_HISTORY_LIMIT=${LLM_HISTORY_LIMIT:-}
 
 mkdir -p "$APP_HOME"
 
@@ -75,7 +76,11 @@ db:insert_message() {
 db:get_messages() {
 	local rows
 	local session_id="${AGENT_SESSION_ID//\'/\'\'}"
-	rows=$(sqlite3 -json "$DB" "SELECT id, role, content, metadata, created_at FROM messages WHERE session_id == '$session_id' ORDER BY id;")
+	if [[ -n "$LLM_HISTORY_LIMIT" ]]; then
+		rows=$(sqlite3 -json "$DB" "SELECT id, role, content, metadata, created_at FROM messages WHERE session_id == '$session_id' ORDER BY id DESC LIMIT $LLM_HISTORY_LIMIT;")
+	else
+		rows=$(sqlite3 -json "$DB" "SELECT id, role, content, metadata, created_at FROM messages WHERE session_id == '$session_id' ORDER BY id;")
+	fi
 	if [[ -z "$rows" ]]; then
 		printf '[]\n'
 		return
