@@ -8,7 +8,7 @@ export TEST_DIRECTORY
 export HOME="$TEST_DIRECTORY/home"
 unset AGENT_SESSION_ID
 unset LLM_CLI_CONFIG LLM_CLI_PROFILE_DIR LLM_CLI_HOOKS PROFILE
-unset LLAMA_URL LLAMA_SOCKET SYSTEM LLM_CLI_TOOL_DIR
+unset LLAMA_URL LLAMA_SOCKET LLM_MODEL_NAME SYSTEM LLM_CLI_TOOL_DIR
 mkdir -p "$TEST_DIRECTORY/schemas"
 printf '%s\n' \
 	'type: object' \
@@ -19,6 +19,32 @@ printf '%s\n' \
 	'  - result' \
 	'additionalProperties: false' >"$TEST_DIRECTORY/schemas/boolean.yaml"
 export LLM_CLI_SCHEMA_DIRECTORY="$TEST_DIRECTORY/schemas"
+
+mkdir -p "$TEST_DIRECTORY/tool fixtures" "$HOME/dev/llm-cli/.config/tools"
+printf '%s\n' 'type: google_search' >"$TEST_DIRECTORY/tool fixtures/search.yaml"
+cat >"$TEST_DIRECTORY/tool fixtures/read.yaml" <<'YAML'
+type: function
+name: read
+description: Read local files
+parameters:
+  type: object
+  properties:
+    paths:
+      type: array
+      items: {type: string}
+  required: [paths]
+YAML
+cat >"$TEST_DIRECTORY/tool fixtures/input.yaml" <<'YAML'
+type: function
+name: input
+description: Ask the user for input
+parameters:
+  type: object
+  properties:
+    answer: {type: string}
+  required: [answer]
+YAML
+cp "$TEST_DIRECTORY/tool fixtures/"*.yaml "$HOME/dev/llm-cli/.config/tools/"
 
 printf 'file content\nwith "quotes"\n' >"$TEST_DIRECTORY/notes.txt"
 printf 'another file\n' >"$TEST_DIRECTORY/notes [1].txt"
@@ -220,10 +246,10 @@ export -f curl notify-send secret-tool
 ask() {
 	case "${1:-}" in
 	llama | gemini | grok)
-		bash "$ROOT/llm.sh" "$@"
+		bash "$ROOT/bin/llm.sh" "$@"
 		;;
 	*)
-		bash "$ROOT/llm.sh" llama "$@"
+		bash "$ROOT/bin/llm.sh" llama "$@"
 		;;
 	esac
 }
@@ -253,7 +279,7 @@ rg -q -- '--image-gen' "$TEST_DIRECTORY/output"
 rg -q -- '--buff' "$TEST_DIRECTORY/output"
 rg -q -- '--schema' "$TEST_DIRECTORY/output"
 rg -q -- '--tools' "$TEST_DIRECTORY/output"
-bash "$ROOT/llm.sh" --help >"$TEST_DIRECTORY/output"
+bash "$ROOT/bin/llm.sh" --help >"$TEST_DIRECTORY/output"
 rg -q 'llama\|gemini\|grok' "$TEST_DIRECTORY/output"
 printf 'piped "context"\n' | ask grok 'Hello' --verbose >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'https://api.x.ai/v1/responses' ]]
@@ -306,11 +332,17 @@ expect_failure gemini --image-gen 'Unsupported'
 expect_failure grok --image-gen --search 'Unsupported combination'
 ask 'Hello' --verbose </dev/null >"$TEST_DIRECTORY/output"
 rg -q 'Thinking\.\.\.' "$TEST_DIRECTORY/output"
-assert_request '.messages[0].role == "system" and (.messages[0].content | contains("CommonMark")) and (.messages[0].content as $system | ["Linux kernel:", "Operating system:", "USER environment variable:", "Current user:", "CPU:", "GPU:", "Current working directory:"] | all(.[]; . as $label | $system | contains($label))) and .messages[-1] == {role: "user", content: "Hello"} and .temperature == 0 and .max_tokens == 1024 and .stream == true and .stream_options.include_usage == true and (has("model") | not)'
+assert_request '.messages[0].role == "system" and (.messages[0].content | contains("CommonMark")) and (.messages[0].content as $system | ["Linux kernel:", "Operating system:", "USER environment variable:", "Current user:", "CPU:", "GPU:", "Current working directory:"] | all(.[]; . as $label | $system | contains($label))) and .messages[-1] == {role: "user", content: "Hello"} and .temperature == 0.6 and (has("max_tokens") | not) and .stream == true and .stream_options.include_usage == true and .model == "qwen3.5-4bunc"'
 [[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost:8080/v1/chat/completions' ]]
 rg -q '^TTFT: .* \| TPS: .* \| Total tokens: 10$' "$TEST_DIRECTORY/output"
 ask llama 'Select a model' --model qwen-test </dev/null >"$TEST_DIRECTORY/output"
 assert_request '.model == "qwen-test"'
+LLM_MODEL_NAME=environment-model ask llama 'Environment model' </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.model == "environment-model"'
+LLM_MODEL_NAME=environment-model ask llama 'Override environment model' --model flag-model </dev/null >"$TEST_DIRECTORY/output"
+assert_request '.model == "flag-model"'
+expect_failure llama 'Empty model' --model ''
+expect_failure llama 'Blank model' --model '   '
 LLAMA_SOCKET="$TEST_DIRECTORY/llama.sock" ask llama 'Unix socket prompt' --verbose \
 	</dev/null >"$TEST_DIRECTORY/output"
 [[ "$(<"$TEST_DIRECTORY/url")" == 'http://localhost/v1/chat/completions' ]]
@@ -330,6 +362,7 @@ mkdir -p "$HOME/.config/llm-cli/profiles" "$TEST_DIRECTORY/profile tools" \
 	"$HOME/.config/llm-cli/tools" "$HOME/dev/llm-cli/.config/tools"
 cat >"$HOME/.config/llm-cli/profiles/configured.env" <<'PROFILE'
 LLAMA_URL='https://profile.example.test/custom-api/'
+LLM_MODEL_NAME='profile-model'
 LLM_CLI_SCHEMA_DIRECTORY="$TEST_DIRECTORY/profile schemas"
 LLM_CLI_TOOL_DIR="$TEST_DIRECTORY/profile tools"
 SYSTEM='Profile instructions: "quoted" $literal.
@@ -354,7 +387,7 @@ for provider in llama gemini grok; do
 	llama)
 		[[ "$(<"$TEST_DIRECTORY/url")" == 'https://profile.example.test/custom-api/v1/chat/completions' ]]
 		jq -e --arg system "$custom_system" \
-			'.messages[0].content == $system and .response_format.json_schema.schema.title == "ProfileSchema"' \
+			'.model == "profile-model" and .messages[0].content == $system and .response_format.json_schema.schema.title == "ProfileSchema"' \
 			"$TEST_DIRECTORY/request.json" >/dev/null
 		;;
 	gemini)
@@ -377,7 +410,7 @@ done
 	ask llama 'Unset schema directory' --schema home </dev/null >"$TEST_DIRECTORY/output"
 	assert_request '.response_format.json_schema.schema.title == "HomeSchema"'
 )
-bash "$ROOT/bin/llm.sh" --profile configured gemini 'Configured tool priority and repository fallback' \
+bash "$ROOT/bin/llm.sh" --profile configured gemini 'Configured tool priority and fallback' \
 	--tools read search </dev/null >"$TEST_DIRECTORY/output"
 assert_request '.tools[0].description == "Profile read tool" and .tools[1] == {type: "google_search"}'
 LLM_CLI_TOOL_DIR="$TEST_DIRECTORY/no tools here" ask gemini 'Home fallback tool' --tools read \
@@ -387,42 +420,57 @@ LLM_CLI_TOOL_DIR='' ask gemini 'Default tool directory' --tools home_only \
 	</dev/null >"$TEST_DIRECTORY/output"
 assert_request '.tools == [{type: "google_search"}]'
 rm "$HOME/dev/llm-cli/.config/tools/read.yaml" "$HOME/.config/llm-cli/tools/home_only.yaml"
+cp "$TEST_DIRECTORY/tool fixtures/read.yaml" "$HOME/dev/llm-cli/.config/tools/read.yaml"
 
 (
 	curl() {
 		printf '%s\n' "$@" >"$TEST_DIRECTORY/manage-request"
 		printf '%s\n' "$@" >>"$TEST_DIRECTORY/manage-calls"
-		printf '%s' '{"config":{"model":"server-model","params":"8b","context":4096,"vram":8,"agents":2}}'
+		if [[ "${HTTP_ERROR:-false}" == true ]]; then
+			printf '%s' '{"error":{"message":"model not found"}}'
+			return 22
+		fi
+		printf '%s' '{"success":true}'
 	}
 	export -f curl
 	bash "$ROOT/bin/llm.sh" manage status >"$TEST_DIRECTORY/output"
-	grep -Fxq 'http://localhost:8080/status' "$TEST_DIRECTORY/manage-request"
+	grep -Fxq 'http://localhost:8080/models' "$TEST_DIRECTORY/manage-request"
 	for base in '' 'http://localhost:9090' 'https://custom.example.test/api/'; do
 		export LLAMA_URL="$base"
 		expected_base="${base:-http://localhost:8080}"
 		expected_base="${expected_base%/}"
 		bash "$ROOT/bin/llm.sh" manage status >"$TEST_DIRECTORY/output"
-		grep -Fxq "$expected_base/status" "$TEST_DIRECTORY/manage-request"
+		grep -Fxq "$expected_base/models" "$TEST_DIRECTORY/manage-request"
 		grep -Fxq GET "$TEST_DIRECTORY/manage-request"
 		bash "$ROOT/bin/llm.sh" manage pause >"$TEST_DIRECTORY/output"
-		grep -Fxq "$expected_base/pause" "$TEST_DIRECTORY/manage-request"
+		grep -Fxq "$expected_base/models/unload" "$TEST_DIRECTORY/manage-request"
 		grep -Fxq POST "$TEST_DIRECTORY/manage-request"
-		grep -Fxq '{}' "$TEST_DIRECTORY/manage-request"
-		bash "$ROOT/bin/llm.sh" manage resume --preserve-flux --clear-cpu-encoder --no-restart \
-			>"$TEST_DIRECTORY/output"
-		grep -Fxq "$expected_base/resume?preserve_flux=true&clear_cpu_encoder=true&restart=false" \
-			"$TEST_DIRECTORY/manage-request"
+		grep -Fxq '{"model":"qwen3.5-4bunc"}' "$TEST_DIRECTORY/manage-request"
+		LLM_MODEL_NAME=environment-model bash "$ROOT/bin/llm.sh" manage resume >"$TEST_DIRECTORY/output"
+		grep -Fxq "$expected_base/models/load" "$TEST_DIRECTORY/manage-request"
+		grep -Fxq '{"model":"environment-model"}' "$TEST_DIRECTORY/manage-request"
 		: >"$TEST_DIRECTORY/manage-calls"
-		bash "$ROOT/bin/llm.sh" manage swap >"$TEST_DIRECTORY/output"
-		grep -Fxq "$expected_base/status" "$TEST_DIRECTORY/manage-calls"
-		grep -Fxq "$expected_base/change-model/?preserve_flux=false&clear_cpu_encoder=false&restart=true" \
-			"$TEST_DIRECTORY/manage-request"
-		grep -Fxq '{"model":"server-model","params":"8b","context":4096,"vram":8,"agents":2}' \
-			"$TEST_DIRECTORY/manage-request"
+		bash "$ROOT/bin/llm.sh" manage swap --model another-model >"$TEST_DIRECTORY/output"
+		grep -Fxq "$expected_base/models/load" "$TEST_DIRECTORY/manage-request"
+		grep -Fxq '{"model":"another-model"}' "$TEST_DIRECTORY/manage-request"
+		[[ "$(grep -c -- --fail-with-body "$TEST_DIRECTORY/manage-calls")" == 1 ]]
 	done
 	bash "$ROOT/bin/llm.sh" --profile configured manage status >"$TEST_DIRECTORY/output"
-	grep -Fxq 'https://profile.example.test/custom-api/status' "$TEST_DIRECTORY/manage-request"
-	for flag in -l --location; do
+	grep -Fxq 'https://profile.example.test/custom-api/models' "$TEST_DIRECTORY/manage-request"
+	bash "$ROOT/bin/llm.sh" --profile configured manage swap >"$TEST_DIRECTORY/output"
+	grep -Fxq '{"model":"profile-model"}' "$TEST_DIRECTORY/manage-request"
+	for command in status models pause unload resume load swap; do
+		LLAMA_SOCKET="$TEST_DIRECTORY/router.sock" bash "$ROOT/bin/llm.sh" manage "$command" >"$TEST_DIRECTORY/output"
+		grep -Fxq -- '--unix-socket' "$TEST_DIRECTORY/manage-request"
+		grep -Fxq "$TEST_DIRECTORY/router.sock" "$TEST_DIRECTORY/manage-request"
+		case "$command" in
+		status | models) path=models ;;
+		pause | unload) path=models/unload ;;
+		*) path=models/load ;;
+		esac
+		grep -Fxq "http://localhost/$path" "$TEST_DIRECTORY/manage-request"
+	done
+	for flag in -l --location --params --context --vram --agents --preserve-flux --clear-cpu-encoder --no-restart; do
 		: >"$TEST_DIRECTORY/manage-calls"
 		if bash "$ROOT/bin/llm.sh" manage status "$flag" local \
 			>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
@@ -432,6 +480,22 @@ rm "$HOME/dev/llm-cli/.config/tools/read.yaml" "$HOME/.config/llm-cli/tools/home
 		grep -Fq "Unknown option: $flag" "$TEST_DIRECTORY/error"
 		[[ ! -s "$TEST_DIRECTORY/manage-calls" ]]
 	done
+	for command in status swap; do
+		: >"$TEST_DIRECTORY/manage-calls"
+		if bash "$ROOT/bin/llm.sh" manage "$command" --model '' >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
+			echo 'Expected manage to reject an empty model' >&2
+			exit 1
+		fi
+		[[ ! -s "$TEST_DIRECTORY/manage-calls" ]]
+	done
+	if bash "$ROOT/bin/llm.sh" manage status --model test-model >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
+		echo 'Expected status to reject --model' >&2
+		exit 1
+	fi
+	status=0
+	HTTP_ERROR=true bash "$ROOT/bin/llm.sh" manage swap --model missing >"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error" || status=$?
+	[[ "$status" == 22 ]]
+	grep -Fq 'model not found' "$TEST_DIRECTORY/output"
 	bash "$ROOT/bin/llm.sh" manage --help >"$TEST_DIRECTORY/output"
 	if grep -Fq -- '--location' "$TEST_DIRECTORY/output"; then
 		echo 'Management help still advertises locations' >&2
@@ -605,7 +669,7 @@ expect_failure grok --stream=invalid 'Invalid stream option'
 expect_failure gemini 'Hello' --model 'bad/model'
 expect_failure gemini 'Hello' --images "$TEST_DIRECTORY/missing.png"
 expect_failure gemini 'Hello' --files https://example.test/missing.txt
-script -qefc "bash '$ROOT/llm.sh' gemini 'Show stream status'" /dev/null \
+script -qefc "bash '$ROOT/bin/llm.sh' gemini 'Show stream status'" /dev/null \
 	>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"
 if rg -q 'Response received' "$TEST_DIRECTORY/output"; then
 	echo 'Redundant response status was displayed' >&2
@@ -615,11 +679,11 @@ rg -q 'Hello.*world' "$TEST_DIRECTORY/output"
 
 mkdir -p "$HOME/.config/llm-cli/tools"
 sed 's/^description:.*/description: Reads files from user configuration/' \
-	"$ROOT/.config/tools/read.yaml" >"$HOME/.config/llm-cli/tools/read.yaml"
+	"$TEST_DIRECTORY/tool fixtures/read.yaml" >"$HOME/.config/llm-cli/tools/read.yaml"
 export AGENT_SESSION_ID='tool-session'
 export TOOL_TEST_MODE=true
 for prompt in 'Read the notes' 'Read the notes again'; do
-	if ! printf 'y\n' | script -qefc "bash '$ROOT/llm.sh' gemini '$prompt' --tools read" /dev/null \
+	if ! printf 'y\n' | script -qefc "bash '$ROOT/bin/llm.sh' gemini '$prompt' --tools read" /dev/null \
 		>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
 		cat "$TEST_DIRECTORY/output" "$TEST_DIRECTORY/error" >&2
 		exit 1
@@ -667,7 +731,7 @@ duplicate_key=$(sqlite3 "$HOME/.local/share/llm-cli/.db" \
 db:insert_message tool_result duplicate null "$duplicate_key" duplicate
 [[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" "SELECT count(*) FROM messages WHERE session_id = 'tool-session' AND role = 'tool_result';")" == 2 ]]
 export TOOL_TEST_MODE=true
-if printf 'n\n' | script -qefc "bash '$ROOT/llm.sh' gemini 'Decline reading the notes' --tools read" /dev/null \
+if printf 'n\n' | script -qefc "bash '$ROOT/bin/llm.sh' gemini 'Decline reading the notes' --tools read" /dev/null \
 	>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
 	echo 'Expected the declined tool call to fail' >&2
 	exit 1
@@ -723,7 +787,7 @@ unset AGENT_SESSION_ID
 export INPUT_TEST_MODE=true
 export AGENT_SESSION_ID=input-session
 if ! printf '%s\n' 'y' '  notes\with "quotes".txt  ' |
-	script -qefc "bash '$ROOT/llm.sh' gemini 'Ask me for a file' --tools input read" /dev/null \
+	script -qefc "bash '$ROOT/bin/llm.sh' gemini 'Ask me for a file' --tools input read" /dev/null \
 	>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
 	cat "$TEST_DIRECTORY/output" "$TEST_DIRECTORY/error" >&2
 	exit 1
@@ -741,7 +805,7 @@ assert_request '
 '
 [[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" "SELECT count(*) FROM messages WHERE session_id = 'input-session';")" == 5 ]]
 [[ "$(sqlite3 "$HOME/.local/share/llm-cli/.db" "SELECT json_extract(content, '$.status') FROM messages WHERE session_id = 'input-session' AND role = 'human_gate';")" == approved ]]
-if printf 'n\n' | script -qefc "bash '$ROOT/llm.sh' gemini 'Ask again' --tools input" /dev/null \
+if printf 'n\n' | script -qefc "bash '$ROOT/bin/llm.sh' gemini 'Ask again' --tools input" /dev/null \
 	>"$TEST_DIRECTORY/output" 2>"$TEST_DIRECTORY/error"; then
 	echo 'Expected declined input tool to fail' >&2
 	exit 1
@@ -774,7 +838,7 @@ PYTHON
 	jq -e '.tools == [{type:"google_search"}, {type:"function",name:"lookup",parameters:{type:"object"}}]' <<<"$REQ" >/dev/null
 )
 
-PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYTHON'
+PYTHONPATH="$ROOT/libexec${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYTHON'
 import io
 import json
 from unittest.mock import patch

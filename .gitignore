@@ -1,4 +1,7 @@
 /*.sh
 /*.py
 .config
+*.pyc
 __pycache__/stream_response.cpython-314.pyc
+**/__pycache__/
+.venv

@@ -1,4 +1,8 @@
-MODEL="${MODEL:-}"
+MODEL="${MODEL:-${LLM_MODEL_NAME:-qwen3.5-4bunc}}"
+if [[ "$MODEL" != *[![:space:]]* ]]; then
+	echo "model must be a nonempty name" >&2
+	exit 1
+fi
 source "$SCRIPT_DIRECTORY/../lib/llama_urls.sh"
 
 add_image() {
@@ -24,6 +28,7 @@ build_request() {
 		--rawfile request "$REQUEST_FILE" \
 		'($request | fromjson) as $request |
 		{
+			model: $model,
 			messages: (
 				$request.messages as $messages |
 				$messages[:-1] + [
@@ -51,7 +56,6 @@ build_request() {
 			stream: true,
 			stream_options: {include_usage: true}
 		} +
-		(if $model != "" then {model: $model} else {} end) +
 		(if $schema_name != "" then {response_format: {
 			type: "json_schema",
 			json_schema: {name: $schema_name, schema: $schema, strict: true}

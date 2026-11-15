@@ -103,7 +103,7 @@ while [[ $# -gt 0 ]]; do
 		shift 2
 		;;
 	-m | --model)
-		if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+		if [[ $# -lt 2 || "$2" != *[![:space:]]* || "$2" == -* ]]; then
 			echo "$flag requires a model" >&2
 			exit 1
 		fi
