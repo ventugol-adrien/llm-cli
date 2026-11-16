@@ -426,6 +426,18 @@ file contents with `tail -n +1`, including filename headers for multiple files.
 NUL-delimited arguments preserve spaces and special characters in paths.
 Read errors are reported by `tail` and cause the tool to fail; any output already
 read from other files may still be printed.
+
+`write` receives `{"paths":["FILE",...],"content":"TEXT"}` and writes the same
+content to each path, replacing existing file contents. Paths must be non-empty,
+and their parent directories must already exist. Review the requested paths and
+content before approving the tool call.
+
+`rg` receives `{"pattern":"TEXT","paths":["TEXT",...]}` and searches every
+line recursively for a match.
+
+`tree` receives `{"path":"TEXT,"depth":"INT"}` and prints a tree representation
+of the supplied dir, showing a clear file hierarchy. 
+
 Gemini tool interactions remain stateless (`store: false`); the
 CLI resends the complete interaction history, including tool calls and results.
 

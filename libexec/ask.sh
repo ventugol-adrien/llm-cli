@@ -572,32 +572,39 @@ if [[ ${#TOOL_NAMES[@]} -gt 0 ]]; then
 			fi
 			tool_executable="$SCRIPT_DIRECTORY/tool_execs/$call_name.sh"
 			tool_output_file="$ASSET_TEMP_DIR/tool-output"
+			tool_result_file="$ASSET_TEMP_DIR/tool-result.json"
+			function_result_file="$ASSET_TEMP_DIR/function-result.json"
 			tool_status=0
 			if [[ "$STOP_TOOL_EXECUTION" == true ]]; then
 				gate_status=not_attempted
-				tool_result=$(jq -cn '{error: "Not executed because an earlier function call was not approved"}')
+				jq -cn '{error: "Not executed because an earlier function call was not approved"}' \
+					>"$tool_result_file"
 			else
 				if "$SCRIPT_DIRECTORY/confirm_exec.sh" --tool-call "$PROVIDER" "$call_name" \
 					"$tool_executable" "$call_arguments" "$call_arguments" >"$tool_output_file"; then
 					gate_status=approved
-					tool_result=$(jq -cn --rawfile content "$tool_output_file" '{content: $content}')
+					jq -cn --rawfile content "$tool_output_file" '{content: $content}' \
+						>"$tool_result_file"
 				else
 					tool_status=$?
 					case "$tool_status" in
 					124)
 						gate_status=unavailable
-						tool_result=$(jq -cn '{error: "Interactive confirmation was unavailable"}')
+						jq -cn '{error: "Interactive confirmation was unavailable"}' \
+							>"$tool_result_file"
 						STOP_TOOL_EXECUTION=true
 						;;
 					125)
 						gate_status=declined
-						tool_result=$(jq -cn '{error: "Execution was declined by the user"}')
+						jq -cn '{error: "Execution was declined by the user"}' \
+							>"$tool_result_file"
 						STOP_TOOL_EXECUTION=true
 						;;
 					*)
 						gate_status=approved
 						tool_result=$(jq -cn --arg status "$tool_status" \
 							'{error: ("Tool executable exited with status " + $status)}')
+						printf '%s' "$tool_result" >"$tool_result_file"
 						;;
 					esac
 				fi
@@ -612,19 +619,20 @@ if [[ ${#TOOL_NAMES[@]} -gt 0 ]]; then
 				db:insert_message human_gate "$gate_record" "$MESSAGE_METADATA" \
 					"turn:$REQ_ID:gate:$call_id" "$REQ_ID"
 			fi
-			function_result=$(jq -cn \
+			jq -cn \
 				--arg name "$call_name" \
 				--arg call_id "$call_id" \
-				--arg result "$tool_result" \
+				--slurpfile result "$tool_result_file" \
 				'{
 					type: "function_result",
 					name: $name,
 					call_id: $call_id,
-					result: [{type: "text", text: $result}]
-				}')
-			TOOL_HISTORY_JSON=$(jq -c --argjson result "$function_result" '. + [$result]' <<<"$TOOL_HISTORY_JSON")
+					result: [{type: "text", text: ($result[0] | tojson)}]
+				}' >"$function_result_file"
+			TOOL_HISTORY_JSON=$(jq -c --slurpfile result "$function_result_file" \
+				'. + $result' <<<"$TOOL_HISTORY_JSON")
 			if [[ -n "${AGENT_SESSION_ID:-}" ]]; then
-				db:insert_message tool_result "$function_result" "$MESSAGE_METADATA" \
+				db:insert_message tool_result "$(cat "$function_result_file")" "$MESSAGE_METADATA" \
 					"turn:$REQ_ID:result:$call_id" "$REQ_ID"
 			fi
 		done < <(jq -c '.[]' <<<"$FUNCTION_CALLS")

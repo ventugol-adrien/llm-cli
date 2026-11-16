@@ -66,6 +66,26 @@ if bash "$ROOT/libexec/tool_execs/read.sh" "$read_arguments" \
 	exit 1
 fi
 rg -q 'missing.txt' "$TEST_DIRECTORY/read-error"
+write_content=$'first line\nwith "quotes" and $dollars\n'
+write_arguments=$(jq -cn \
+	--arg first "$TEST_DIRECTORY/written file.txt" \
+	--arg second "$TEST_DIRECTORY/written [1].txt" \
+	--arg content "$write_content" \
+	'{paths:[$first,$second],content:$content}')
+bash "$ROOT/libexec/tool_execs/write.sh" "$write_arguments"
+printf '%s' "$write_content" >"$TEST_DIRECTORY/write-expected"
+cmp "$TEST_DIRECTORY/write-expected" "$TEST_DIRECTORY/written file.txt"
+cmp "$TEST_DIRECTORY/write-expected" "$TEST_DIRECTORY/written [1].txt"
+write_arguments=$(jq -cn --arg path "$TEST_DIRECTORY/empty.txt" '{paths:[$path],content:""}')
+bash "$ROOT/libexec/tool_execs/write.sh" "$write_arguments"
+[[ ! -s "$TEST_DIRECTORY/empty.txt" ]]
+if bash "$ROOT/libexec/tool_execs/write.sh" '{"paths":[],"content":"text"}' \
+	>"$TEST_DIRECTORY/write-output" 2>"$TEST_DIRECTORY/write-error"; then
+	echo 'Expected write to reject an empty paths array' >&2
+	exit 1
+fi
+[[ ! -e "$TEST_DIRECTORY/text" ]]
+rg -q 'Usage: write.sh' "$TEST_DIRECTORY/write-error"
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5x8AAAAASUVORK5CYII=' | base64 -d >"$TEST_DIRECTORY/image.png"
 
 secret-tool() {
